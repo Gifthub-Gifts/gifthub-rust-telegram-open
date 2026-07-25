@@ -1,0 +1,26 @@
+[package]
+name = "gifthub-rust-telegram"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+# default-features off drops native-tls (one TLS stack per binary: rustls) and the
+# ctrlc handler (we run our own SIGINT/SIGTERM watch bus like the sibling gateways).
+teloxide = { version = "0.17", default-features = false, features = ["rustls"] }
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dotenv = "0.15"
+log = "0.4"
+env_logger = "0.11"
+# created_at staleness check (Django emits RFC-3339 with +00:00; `time` parses that and Z).
+time = { version = "0.3", features = ["parsing"] }
+
+# House release profile (identical across the gifthub-rust-* gateways): smallest binary wins.
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+codegen-units = 1
+panic = "abort"

@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches-ignore: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build
+      - run: cargo fmt --all --check
+      - run: cargo check --all-targets --locked
+      - run: cargo test --all-targets --locked
+      - run: cargo build --release --locked
+      # Binary sanity (size matters — this service exists to save RAM).
+      - run: ls -la target/release/gifthub-rust-telegram && du -h target/release/gifthub-rust-telegram
+      # Clippy is a gate here (stricter than the reference bots' informational clippy) — the code
+      # is clippy-clean today, so keep it that way.
+      - run: cargo clippy --all-targets --locked -- -D warnings
