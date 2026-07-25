@@ -3,7 +3,7 @@
 //! Fourth gateway in the family (-ai, -payments, -mail), in its simplest form: Django's
 //! `apps.telegram.services.notify_ops()` RPUSHes `{job_id, event, text, dedupe_key, created_at}`
 //! onto the `telegram_jobs` list (redis db 6, LTRIM-capped producer-side); this binary BLPOPs,
-//! collapses repeats per `dedupe_key`, and delivers to the single admin chat. No callback, no
+//! collapses repeats per `dedupe_key`, and delivers to every admin chat. No callback, no
 //! outbox, no inbound port — a dropped alert is acceptable, a blocked producer is not, and
 //! journald plus the heartbeat key are the only ops surfaces.
 //!
@@ -33,11 +33,14 @@ use error::SendError;
 
 #[tokio::main]
 async fn main() {
+    // dotenv BEFORE the logger: RUST_LOG may live in .env (local runs — systemd injects the
+    // env file itself), and env_logger reads the process env exactly once at init.
+    dotenv::dotenv().ok();
     env_logger::init();
     let cfg = config::get_config();
     log::info!(
-        "gifthub-rust-telegram starting (chat {})",
-        cfg.admin_chat_id
+        "gifthub-rust-telegram starting ({} admin chat(s))",
+        cfg.admin_chat_ids.len()
     );
 
     let mut consumer = match redis_io::init_redis(&cfg.redis_url).await {
@@ -79,16 +82,17 @@ async fn main() {
         shutdown_tx.send(true).ok();
     });
 
-    // Startup smoke message: proves token + chat id before we consume anything. A permanent
-    // API answer (bad token / unknown chat / bot blocked) is a config error — exit non-zero so
-    // the deploy health check reddens (no ready marker, unit flaps visibly). A transient
-    // failure must NOT stop the consumer: Telegram being down is exactly when jobs should
-    // keep queueing here rather than piling into Redis past the stale cutoff.
+    // Startup smoke message: proves token + chat ids before we consume anything. Exit non-zero
+    // only when EVERY admin rejected permanently (bad token, or every chat id wrong) — that's a
+    // config error, and the deploy health check reddens (no ready marker, unit flaps visibly).
+    // One bad admin among several is logged by the fan-out and must not stop the service, and
+    // neither may a transient Telegram outage: jobs should keep queueing here rather than
+    // piling into Redis past the stale cutoff.
     {
         let mut rx = shutdown_rx.clone();
-        match telegram::send_text(
+        match telegram::send_to_admins(
             &bot,
-            cfg.admin_chat_id,
+            &cfg.admin_chat_ids,
             "🚀 gifthub-rust-telegram started",
             cfg.send_max_attempts,
             &mut rx,
@@ -97,7 +101,7 @@ async fn main() {
         {
             Ok(()) => log::info!("✅ startup message delivered"),
             Err(SendError::Permanent(e)) => {
-                log::error!("❌ startup message permanently rejected ({e}) — check TELOXIDE_TOKEN / TELEGRAM_ADMIN_CHAT_ID");
+                log::error!("❌ startup message rejected by every admin chat ({e}) — check TELOXIDE_TOKEN / TELEGRAM_ADMIN_CHAT_IDS");
                 std::process::exit(1);
             }
             Err(e) => log::warn!("startup message not delivered ({e}); continuing"),
@@ -223,9 +227,9 @@ async fn handle_job(
         ));
     }
 
-    match telegram::send_text(
+    match telegram::send_to_admins(
         &bot,
-        cfg.admin_chat_id,
+        &cfg.admin_chat_ids,
         &text,
         cfg.send_max_attempts,
         &mut shutdown,

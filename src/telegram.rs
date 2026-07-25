@@ -22,8 +22,31 @@ pub fn build_bot(token: &str) -> Bot {
     Bot::new(token)
 }
 
-/// Send one alert text (splitting if oversized). Stops at the first failed chunk.
-pub async fn send_text(
+/// Fan one alert out to every admin chat. One admin failing (blocked bot, never-started chat,
+/// bad id) must not block the others — each gets its own send+retry, failures are logged per
+/// admin (watchdog-open's fan-out rule). `Ok` when at least one admin received the alert;
+/// otherwise the merged error decides requeue-vs-drop (any transient failure wins, because a
+/// retry might still reach someone).
+pub async fn send_to_admins(
+    bot: &Bot,
+    chat_ids: &[i64],
+    text: &str,
+    max_attempts: u32,
+    shutdown: &mut watch::Receiver<bool>,
+) -> Result<(), SendError> {
+    let mut outcomes = Vec::with_capacity(chat_ids.len());
+    for &chat_id in chat_ids {
+        let res = send_text(bot, chat_id, text, max_attempts, shutdown).await;
+        if let Err(e) = &res {
+            log::warn!("delivery to admin {chat_id} failed: {e}");
+        }
+        outcomes.push(res);
+    }
+    merge_outcomes(outcomes)
+}
+
+/// Send one alert text to one chat (splitting if oversized). Stops at the first failed chunk.
+async fn send_text(
     bot: &Bot,
     chat_id: i64,
     text: &str,
@@ -34,6 +57,23 @@ pub async fn send_text(
         send_with_retry(bot, chat_id, &chunk, max_attempts, shutdown).await?;
     }
     Ok(())
+}
+
+/// Any success → success. All failed → prefer the transient error (job stays retryable);
+/// only when every admin failed permanently is the job a permanent drop.
+fn merge_outcomes(outcomes: Vec<Result<(), SendError>>) -> Result<(), SendError> {
+    if outcomes.iter().any(|o| o.is_ok()) {
+        return Ok(());
+    }
+    let mut permanent = None;
+    for o in outcomes {
+        match o {
+            Err(e) if e.is_transient() => return Err(e),
+            Err(e) => permanent = Some(e),
+            Ok(()) => unreachable!("handled above"),
+        }
+    }
+    Err(permanent.unwrap_or_else(|| SendError::Transient("no admin chats configured".into())))
 }
 
 async fn send_with_retry(
@@ -170,6 +210,30 @@ mod tests {
             suppressed_suffix(2, 600),
             "\n(+2 suppressed in the last 10 min)"
         );
+    }
+
+    #[test]
+    fn merge_any_success_wins() {
+        let outcomes = vec![Err(SendError::Permanent("chat not found".into())), Ok(())];
+        assert!(merge_outcomes(outcomes).is_ok());
+    }
+
+    #[test]
+    fn merge_prefers_transient_when_all_fail() {
+        let outcomes = vec![
+            Err(SendError::Permanent("chat not found".into())),
+            Err(SendError::Transient("network".into())),
+        ];
+        assert!(merge_outcomes(outcomes).unwrap_err().is_transient());
+    }
+
+    #[test]
+    fn merge_all_permanent_is_permanent() {
+        let outcomes = vec![
+            Err(SendError::Permanent("a".into())),
+            Err(SendError::Permanent("b".into())),
+        ];
+        assert!(!merge_outcomes(outcomes).unwrap_err().is_transient());
     }
 
     #[test]

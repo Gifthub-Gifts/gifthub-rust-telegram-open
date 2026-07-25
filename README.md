@@ -3,7 +3,7 @@
 One-way ops alerts from the GiftHub apps to the operator's Telegram chat. Fourth gateway in the
 family (`gifthub-rust-ai`, `gifthub-rust-payments`, `gifthub-rust-mail`), and the simplest:
 Django's `apps.telegram.services.notify_ops()` RPUSHes a job onto a Redis list; this binary
-BLPOPs it, collapses repeats, and sends it to one admin chat. No callback, no outbox, no
+BLPOPs it, collapses repeats, and sends it to the admin chats. No callback, no outbox, no
 inbound port — a dropped alert is acceptable, a blocked producer is not. Design doc lives
 Django-side: `gifthub/docs/telegram-service-design.md`.
 
