@@ -59,5 +59,6 @@ GET+DEL pipeline (not GETDEL: prod runs Redis 6.0).
   `redis-cli -n 6 RPUSH telegram_jobs '{"job_id":"t1","event":"test","text":"hello 🚀","dedupe_key":"t","created_at":"'"$(date -u +%Y-%m-%dT%H:%M:%S+00:00)"'"}'`
   → message arrives; push it again → suppressed (journald line); after the window the next one
   reports the suppressed count.
-- Config: a host `.env` (see `.env.example`). Deploy is build → scp → restart → health check →
-  auto-rollback, same shape as the siblings; the workflow and unit are kept in the private production repo.
+- Config: `/srv/gifthub-rust-telegram/.env` (see `.env.example`), unit
+  `deploy/gifthub-rust-telegram.service`, deploy via `.github/workflows/deploy.yml`
+  (build → scp → restart → health check → auto-rollback), same shape as the siblings.

@@ -1,0 +1,40 @@
+# /etc/systemd/system/gifthub-rust-telegram.service
+# Ops-alert gateway (Redis alert jobs in, Telegram messages out; one-way, no callbacks).
+# Siblings: gifthub-rust-ai.service, gifthub-rust-payments.service, gifthub-rust-mail.service.
+
+[Unit]
+Description=GiftHub telegram gateway (ops alerts to the operator chat)
+After=network-online.target redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/srv/gifthub-rust-telegram
+EnvironmentFile=/srv/gifthub-rust-telegram/.env
+ExecStart=/srv/gifthub-rust-telegram/gifthub-rust-telegram
+Restart=always
+RestartSec=3
+
+# Explicit stop semantics: the binary drains in-flight sends on SIGTERM (watch-channel bus);
+# give it the full grace window before systemd escalates to SIGKILL.
+KillSignal=SIGTERM
+TimeoutStopSec=90
+
+# An alerter must never be the process that eats the box: it idles at a few MB, so 64 MB is
+# generous headroom, and OOMScoreAdjust makes it the first sacrifice, never Django/Postgres.
+MemoryMax=64M
+OOMScoreAdjust=500
+
+# Hardening: no inbound ports, no shell, nothing to write except /tmp.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gifthub-rust-telegram
+
+[Install]
+WantedBy=multi-user.target
